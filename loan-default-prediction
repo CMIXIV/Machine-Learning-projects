@@ -1,0 +1,133 @@
+#this task project took me to AUC of 0.87 on test (previously unseen) data
+import csv as csv 
+import numpy as np
+import pandas as pd
+train = pd.read_csv('train.csv')
+test = pd.read_csv('test.csv')
+print(train.head())
+print(train.shape)
+print(test.head())
+print(test.shape)
+
+import pylab as P
+import matplotlib.pyplot as plt
+from sklearn.cross_validation import train_test_split
+import xgboost as xgb
+from sklearn.metrics import roc_curve, auc, classification_report
+from sklearn.datasets import make_classification
+from sklearn.linear_model import LogisticRegression
+from sklearn import svm, datasets, metrics
+from sklearn.preprocessing import LabelEncoder
+plt.style.use('ggplot')
+%matplotlib inline
+
+number = LabelEncoder()
+train['par53'] = number.fit_transform(train['par53'].astype(str))
+train['par61'] = number.fit_transform(train['par61'].astype(str))
+train['par71'] = number.fit_transform(train['par71'].astype(str))
+test['par53'] = number.fit_transform(test['par53'].astype(str))
+test['par61'] = number.fit_transform(test['par61'].astype(str))
+test['par71'] = number.fit_transform(test['par71'].astype(str))
+# remove constant columns
+remove = []
+for col in train.columns:
+    if train[col].std() == 0:
+        remove.append(col)
+train.drop(remove, axis=1, inplace=True)
+test.drop(remove, axis=1, inplace=True)
+# remove duplicated columns
+remove = []
+c = train.columns
+for i in range(len(c)-1):
+    v = train[c[i]].values
+    for j in range(i+1,len(c)):
+        if np.array_equal(v,train[c[j]].values):
+            remove.append(c[j])
+train.drop(remove, axis=1, inplace=True)
+test.drop(remove, axis=1, inplace=True)
+
+y_train = train['Status'].values
+X_train = train.drop(['Id','Status'], axis=1).values
+id_test = test['Id']
+X_test = test.drop(['Id','Status'], axis=1).values
+len_train = len(X_train)
+len_test  = len(X_test)
+X_fit, X_eval, y_fit, y_eval=train_test_split(X_train, y_train, random_state=0, test_size=0.3)
+
+xgtrain = xgb.DMatrix(X_fit, label=y_fit)
+xgval = xgb.DMatrix(X_eval, label=y_eval)
+xgtest = xgb.DMatrix(X_test)
+
+# Number of boosting iterations.
+num_round = 1000
+params   = {'eta':0.03, 
+            'objective':'binary:logistic',
+            'booster':'gbtree',
+            'eval_metric':'auc',
+            #'min_child_weight':50,
+            #'scale_pos_weight':50,      #For unbalanced classes
+            'subsample':0.95,
+            'n_estimators':350,
+            'colsample_bytree':0.85,
+            'max_depth':5,
+            #'nfold':5,
+            'nthread':8,
+            'seed':4242,
+            'missing':np.nan,
+            'show_stdv':False
+         }
+evallist = [(xgtrain, 'train'), (xgval, 'val')]
+model = xgb.train(dtrain=xgtrain, evals=evallist, params=params, num_boost_round=num_round, 
+                  early_stopping_rounds=50)
+
+#ROC Plot
+preds_train = model.predict(xgtrain, ntree_limit=model.best_iteration)
+preds_eval = model.predict(xgval, ntree_limit=model.best_iteration)
+false_positive_rate, true_positive_rate, thresholds = metrics.roc_curve(y_fit, preds_train)
+false_positive_rate2, true_positive_rate2, thresholds2 = metrics.roc_curve(y_eval, preds_eval)
+roc_auc = auc(false_positive_rate, true_positive_rate)
+roc_auc2 = auc(false_positive_rate2, true_positive_rate2)
+print("ROC_AUC_score train set:", roc_auc)
+print("ROC_AUC_score test set:", roc_auc2)
+#Plotting
+plt.rcParams['figure.figsize'] = (8.0, 8.0)
+plt.title("Classifier's ROC")
+plt.plot(false_positive_rate, true_positive_rate, 'g',label='Train = %0.4f'% roc_auc)
+plt.plot(false_positive_rate2, true_positive_rate2, 'y',label='Eval = %0.4f'% roc_auc2)
+plt.plot([0,1],[0,1],'r--', label='Random choice')
+plt.legend(loc='lower right')
+plt.xlim([0,1])
+plt.ylim([0,1.05])
+plt.ylabel('True Positive Rate')
+plt.xlabel('False Positive Rate')
+plt.show()
+
+#exporting feature importances
+y_train = train['Status'].values
+X_train = train.drop(['Id','Status'], axis=1).values
+X_fit, X_eval, y_fit, y_eval=train_test_split(X_train, y_train, random_state=0, test_size=0.2)
+xg_cl=xgb.XGBClassifier(objective='binary:logistic',n_estimators=10,seed=123)
+xg_cl.fit(X_fit, y_fit)
+print(xg_cl.feature_importances_)
+
+#saving predictions
+preds = model.predict(xgtest, ntree_limit=model.best_iteration)
+test_aux = pd.read_csv('test.csv')
+result = pd.DataFrame({"Id": id_test, 'Status': preds})
+result.to_csv("submission.csv", index=False)
+print("xgtrain : ", xgtrain.num_row(), xgtrain.num_col())
+print("xgval : ", xgval.num_row(), xgval.num_col())
+print("xgtest : ", xgtest.num_row(), xgtest.num_col())
+print("preds.shape ", preds.shape)
+
+#checking saved predictions
+sub=pd.read_csv('submission.csv')
+print(sub.head(10))
+plt.scatter(sub['Id'],sub['Status'])
+plt.show()
+(n, bins, patches) = plt.hist(sub['Status'],bins=10, label='hist')
+print(n)
+print("The average default prediction is:", np.mean(sub['Status']))
+print("The median default prediction is:", np.median(sub['Status']))
+print("The standard deviation of default prediction is:", np.std(sub['Status']))
+
